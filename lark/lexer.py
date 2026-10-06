@@ -272,6 +272,12 @@ class Token(str):
 
         return str.__eq__(self, other)
 
+    def __ne__(self, other):
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return NotImplemented
+        return not result
+
     __hash__ = str.__hash__
 
 
