@@ -46,8 +46,6 @@ Token
 
 .. autoclass:: lark.Token
 
-The ``!=`` operator between tokens now respects their types as well as their string values, matching ``==``.
-
 Transformer, Visitor & Interpreter
 ----------------------------------
 
