@@ -1,6 +1,7 @@
 from __future__ import absolute_import
 
 import unittest
+import sys
 from copy import deepcopy
 
 from lark import Lark, Tree, Token
@@ -240,6 +241,66 @@ class TestTreeTemplatesTemplateTranslator(unittest.TestCase):
 
 
 class TestTreeTemplatesTemplateDefaultConf(unittest.TestCase):
+    def test_apply_vars_replaces_all_variable_forms(self):
+        replacement = Tree('value', ['$untouched'])
+        for variable in ('$x', Token('TEMPLATE_NAME', '$x'), Tree('var', ['$x'])):
+            with self.subTest(variable=variable):
+                tree = Tree('outer', [Tree('inner', [variable]), 'literal'])
+                original = deepcopy(tree)
+                template = Template(tree)
+                result = template.apply_vars({'x': replacement})
+
+                self.assertEqual(result, Tree('outer', [Tree('inner', [replacement]), 'literal']))
+                self.assertIs(result.children[0].children[0], replacement)
+                self.assertEqual(tree, original)
+                self.assertIs(result.meta, tree.meta)
+
+    def test_apply_vars_missing_string_variable(self):
+        for variable in ('$x', Token('TEMPLATE_NAME', '$x')):
+            with self.subTest(variable=variable):
+                template = Template(Tree('outer', [variable]))
+                with self.assertRaises(MissingVariableError):
+                    template.apply_vars({'other': Tree('value', [])})
+
+    def test_apply_vars_replaces_root_variable(self):
+        replacement = Tree('value', ['$untouched'])
+        template = Template(Tree('var', ['$x']))
+        self.assertIs(template.apply_vars({'x': replacement}), replacement)
+
+    def test_apply_vars_preserves_recursive_tree_depth(self):
+        tree = Tree('leaf', ['literal'])
+        for _ in range(350):
+            tree = Tree('node', [tree])
+        recursion_limit = sys.getrecursionlimit()
+        try:
+            sys.setrecursionlimit(1000)
+            result = Template(tree).apply_vars({})
+        finally:
+            sys.setrecursionlimit(recursion_limit)
+        for _ in range(350):
+            self.assertEqual(result.data, 'node')
+            self.assertIsNot(result, tree)
+            result, tree = result.children[0], tree.children[0]
+        self.assertEqual(result, Tree('leaf', ['literal']))
+
+    def test_translate_inlined_variable_token(self):
+        parser = Lark(r'''
+        start: expr
+        ?expr: "[" expr "]" -> box
+             | NAME -> name
+             | TEMPLATE_NAME
+        TEMPLATE_NAME: /\$[a-z]+/
+        NAME: /[a-z]+/
+        ''', parser='lalr')
+        conf = TemplateConf(parser.parse)
+        source = conf('$value')
+        target = conf('[$value]')
+        tree = parser.parse('alpha')
+        bindings = source.match(tree)
+
+        self.assertEqual(target.apply_vars(bindings), parser.parse('[alpha]'))
+        self.assertEqual(TemplateTranslator({source: target}).translate(tree), parser.parse('[alpha]'))
+
     def test_template_match__match_same_tree__empty_dictionary(self):
         tree = Tree("foo", children=["hi"])
         template = Template(tree)
