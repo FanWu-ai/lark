@@ -1,10 +1,10 @@
 from __future__ import absolute_import
 
 import unittest
-import sys
+import traceback
 from copy import deepcopy
 
-from lark import Lark, Tree, Token
+from lark import Lark, Tree, Token, Transformer
 from lark.exceptions import MissingVariableError
 from lark.tree_templates import TemplateConf, Template, TemplateTranslator
 
@@ -268,20 +268,40 @@ class TestTreeTemplatesTemplateDefaultConf(unittest.TestCase):
         self.assertIs(template.apply_vars({'x': replacement}), replacement)
 
     def test_apply_vars_preserves_recursive_tree_depth(self):
-        tree = Tree('leaf', ['literal'])
-        for _ in range(350):
-            tree = Tree('node', [tree])
-        recursion_limit = sys.getrecursionlimit()
-        try:
-            sys.setrecursionlimit(1000)
-            result = Template(tree).apply_vars({})
-        finally:
-            sys.setrecursionlimit(recursion_limit)
-        for _ in range(350):
-            self.assertEqual(result.data, 'node')
+        transformer_depths = []
+        template_depths = []
+
+        class MeasuringTransformer(Transformer):
+            def __default__(self, data, children, meta):
+                if data == 'leaf':
+                    transformer_depths.append(len(traceback.extract_stack()))
+                return super().__default__(data, children, meta)
+
+        class MeasuringConf(TemplateConf):
+            def test_var(self, node):
+                if isinstance(node, Tree) and node.data == 'leaf':
+                    template_depths.append(len(traceback.extract_stack()))
+                return super().test_var(node)
+
+        for depth in (0, 100):
+            tree = Tree('leaf', ['literal'])
+            for _ in range(depth):
+                tree = Tree('node', [tree])
+            MeasuringTransformer().transform(tree)
+            result = Template(tree, conf=MeasuringConf()).apply_vars({})
+            for _ in range(depth):
+                self.assertEqual(result.data, 'node')
+                self.assertIsNot(result, tree)
+                result, tree = result.children[0], tree.children[0]
+            self.assertEqual(result, Tree('leaf', ['literal']))
             self.assertIsNot(result, tree)
-            result, tree = result.children[0], tree.children[0]
-        self.assertEqual(result, Tree('leaf', ['literal']))
+
+        # Compare per-level stack growth, not an interpreter-specific depth limit.
+        # Subtracting the shallow case removes constant callback/wrapper overhead.
+        self.assertEqual(len(transformer_depths), 2)
+        self.assertEqual(len(template_depths), 2)
+        self.assertLessEqual(template_depths[1] - template_depths[0],
+                             transformer_depths[1] - transformer_depths[0])
 
     def test_translate_inlined_variable_token(self):
         parser = Lark(r'''
